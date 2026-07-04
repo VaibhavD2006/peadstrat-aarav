@@ -1,8 +1,8 @@
 """Tests for SimFin data loader. Requires cached data in data/simfin/ (already present)."""
 import pytest
 from datetime import date
-import os
-os.environ.setdefault("SIMFIN_API_KEY", "98dccc1f-781a-4013-94bf-04688f2b563d")
+from dotenv import load_dotenv
+load_dotenv()  # loads SIMFIN_API_KEY from .env (not committed)
 
 from aria.data.ingestion.simfin_loader import (
     load_income_statements,
