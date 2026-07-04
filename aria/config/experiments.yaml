@@ -1,0 +1,13 @@
+experiments:
+  - name: E01_ESQS_only
+    signals: [ESQS_z]
+    weights: {ESQS_z: 1.0}
+    hold_days: 10
+  - name: E02_RMV_only
+    signals: [RMV_z]
+    weights: {RMV_z: 1.0}
+    hold_days: 10
+  - name: E03_combined
+    signals: [ESQS_z, RMV_z]
+    weights: {ESQS_z: 0.5, RMV_z: 0.5}
+    hold_days: 10

@@ -1,0 +1,37 @@
+universe:
+  min_adv_usd: 5_000_000
+  min_price: 5.0
+  max_names: 700
+
+backtest:
+  start_date: "2014-01-01"
+  end_date: "2024-12-31"
+  in_sample_end: "2020-12-31"
+  initial_capital: 100_000_000
+
+costs:
+  spread_bps_large_cap: 5
+  spread_bps_mid_cap: 10
+  market_impact_multiplier: 10
+  borrow_cost_annual_bps: 30
+  participation_cap: 0.10
+
+portfolio:
+  gross_exposure: 1.0
+  net_tolerance: 0.10
+  max_single_name_pct: 0.05
+  max_sector_net_pct: 0.05
+  min_names_per_side: 15
+  max_names_per_side: 50
+
+signals:
+  holding_period_days: 10
+  esqs_weight: 0.5
+  rmv_weight: 0.5
+  winsorize_sigma: 3.0
+  min_analysts_rmv: 3
+  revision_lookback_days: 90
+
+data:
+  cache_dir: "data/cache"
+  parquet_dir: "data/parquet"
