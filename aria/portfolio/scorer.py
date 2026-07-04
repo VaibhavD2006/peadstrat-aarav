@@ -1,4 +1,4 @@
-import polars as pl
+﻿import polars as pl
 import numpy as np
 from aria.signals.base import cross_sectional_zscore
 
@@ -26,5 +26,8 @@ class CompositeScorer:
         k_short = max(1, int(n * bottom_pct))
         sorted_df = scored.sort("composite", descending=True)
         longs  = sorted_df["ticker"][:k_long].to_list()
-        shorts = sorted_df["ticker"][-k_short:].to_list()
+        longs_set = set(longs)
+        # Collect shorts from the bottom, skipping any ticker already in longs
+        short_candidates = sorted_df["ticker"][-k_short:].to_list()
+        shorts = [t for t in short_candidates if t not in longs_set]
         return longs, shorts

@@ -1,11 +1,11 @@
-import numpy as np
+﻿import numpy as np
 from scipy import stats
 
 class PerformanceAnalytics:
     def sharpe(self, daily_returns: np.ndarray, rf_annual: float = 0.05) -> float:
         rf_daily = rf_annual / 252
         excess   = daily_returns - rf_daily
-        std = excess.std()
+        std = excess.std(ddof=1)
         if std < 1e-10:
             mean = excess.mean()
             if mean > 1e-10:
