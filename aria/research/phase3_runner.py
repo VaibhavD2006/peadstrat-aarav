@@ -448,8 +448,8 @@ class Phase3Runner:
     ) -> float:
         n_long  = max(len(longs), 1)
         n_short = max(len(shorts), 1)
-        avg_vol_long  = float(np.mean([ticker_vols.get(t, 0.30) for t in longs]))
-        avg_vol_short = float(np.mean([ticker_vols.get(t, 0.30) for t in shorts]))
+        avg_vol_long  = float(np.mean([ticker_vols.get(t, 0.30) for t in longs])) if longs else 0.30
+        avg_vol_short = float(np.mean([ticker_vols.get(t, 0.30) for t in shorts])) if shorts else 0.30
         vol_L = avg_vol_long  * np.sqrt(rho_within + (1.0 - rho_within) / n_long)
         vol_S = avg_vol_short * np.sqrt(rho_within + (1.0 - rho_within) / n_short)
         port_vol_est = np.sqrt(vol_L**2 + vol_S**2 - 2.0 * rho_ls * vol_L * vol_S)

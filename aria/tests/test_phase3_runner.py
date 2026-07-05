@@ -28,6 +28,7 @@ def test_vol_target_scale_diversified_book():
     scale_1x1 = runner._vol_target_scale(["L0"], ["S0"], {"L0": 0.35, "S0": 0.35}, 0.15)
     scale_3x3 = runner._vol_target_scale(longs, shorts, vols, 0.15)
     assert scale_3x3 > scale_1x1, "More positions should allow larger scale"
+    assert 0.45 <= scale_3x3 <= 0.55, f"Expected scale_3x3 ~0.50, got {scale_3x3:.3f}"
 
 
 def test_vol_target_scale_capped_at_two():
@@ -36,3 +37,14 @@ def test_vol_target_scale_capped_at_two():
     ticker_vols = {"A": 0.05, "B": 0.05}
     scale = runner._vol_target_scale(["A"], ["B"], ticker_vols, target_vol=0.15)
     assert scale == 2.0
+
+
+def test_vol_target_scale_missing_ticker_uses_fallback():
+    """Tickers not in ticker_vols use 0.30 fallback — no crash, no NaN."""
+    runner = Phase3Runner.__new__(Phase3Runner)
+    scale = runner._vol_target_scale(["MISSING_L"], ["MISSING_S"], {}, target_vol=0.15)
+    # With fallback vol=0.30 for both, same as single position at 0.30:
+    # vol_L = vol_S = 0.30, port_vol = sqrt(0.09 + 0.09 - 2*0.30*0.09) = sqrt(0.126) ≈ 0.355
+    # scale = 0.15 / 0.355 ≈ 0.423
+    assert 0.38 <= scale <= 0.47, f"Expected scale ~0.42, got {scale:.3f}"
+    assert not np.isnan(scale), "scale must not be NaN"
