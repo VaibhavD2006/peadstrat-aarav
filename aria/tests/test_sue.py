@@ -227,3 +227,64 @@ def test_sue_raw_hist_errors_fallback_scale_prevents_tiny_std():
     val = compute_sue_raw(actual_eps=1.10, consensus_eps=1.00,
                           hist_errors=hist, fallback_scale=0.01)
     assert abs(val - 0.10 / 0.01) < 1e-6  # normalizer clamped to 0.01
+
+
+# ---------------------------------------------------------------------------
+# sue_loader: compute_historical_errors
+# ---------------------------------------------------------------------------
+
+from aria.data.ingestion.sue_loader import compute_historical_errors
+
+def _make_rich_consensus_df():
+    """6 quarters of AAPL history for testing historical errors."""
+    return pl.DataFrame({
+        "ticker": ["AAPL"] * 6 + ["MSFT"],
+        "report_date": [
+            date(2022, 7, 1), date(2022, 10, 1),
+            date(2023, 1, 1), date(2023, 4, 1),
+            date(2023, 7, 1), date(2023, 10, 1),
+            date(2023, 10, 15),
+        ],
+        "consensus_eps": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 2.0],
+        "actual_eps":    [1.1, 1.0, 1.3, 1.2, 1.5, 1.4, 2.2],
+    })
+
+
+def test_compute_historical_errors_returns_prior_errors():
+    df = _make_rich_consensus_df()
+    errors = compute_historical_errors("AAPL", date(2024, 1, 1), df, n_quarters=4)
+    # Prior 4 quarters before 2024-01-01: reports on 2023-10-01, 2023-07-01, 2023-04-01, 2023-01-01
+    # errors = actual - consensus: 1.4-1.5=-0.1, 1.5-1.4=+0.1, 1.2-1.3=-0.1, 1.3-1.2=+0.1
+    assert len(errors) == 4
+    assert all(abs(e) == pytest.approx(0.1) for e in errors)
+
+
+def test_compute_historical_errors_excludes_as_of_date():
+    """report_date equal to as_of_date is excluded (point-in-time safe)."""
+    df = _make_rich_consensus_df()
+    errors = compute_historical_errors("AAPL", date(2023, 10, 1), df, n_quarters=4)
+    # as_of_date is 2023-10-01; row on that date is excluded (uses strict <)
+    assert len(errors) == 4  # 4 prior quarters: 2022-07-01, 2022-10-01, 2023-01-01, 2023-04-01
+
+
+def test_compute_historical_errors_returns_empty_for_unknown_ticker():
+    df = _make_rich_consensus_df()
+    errors = compute_historical_errors("UNKNOWN", date(2024, 1, 1), df)
+    assert errors == []
+
+
+def test_get_sue_inputs_uses_historical_errors_in_normalizer():
+    """get_sue_inputs passes hist_errors to compute_sue_raw when >= 2 available."""
+    import numpy as np
+    df = _make_rich_consensus_df()
+    # AAPL has 5 rows total; as_of_date=2024-01-01 → 5 prior rows
+    # Most recent report_date for AAPL: 2023-10-01 (actual=1.4, consensus=1.5)
+    # hist_errors: last 4 of prior quarters = [0.1, -0.1, 0.1, -0.1] (computed from prior < 2023-10-01)
+    rows = get_sue_inputs(["AAPL"], date(2024, 1, 1), df)
+    assert len(rows) == 1
+    # hist_errors for AAPL at report_date=2023-10-01 using 4 prior quarters (before 2023-10-01):
+    # 2022-07-01: 1.1-1.0=+0.1, 2022-10-01: 1.0-1.1=-0.1, 2023-01-01: 1.3-1.2=+0.1, 2023-04-01: 1.2-1.3=-0.1
+    hist = [0.1, -0.1, 0.1, -0.1]
+    expected_norm = max(float(np.std(hist, ddof=1)), 0.01)
+    expected_sue = (1.4 - 1.5) / expected_norm
+    assert abs(rows[0]["sue_raw"] - expected_sue) < 0.01
