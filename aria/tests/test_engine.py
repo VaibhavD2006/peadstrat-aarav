@@ -71,3 +71,74 @@ def test_engine_empty_when_no_prices():
     })
     results = engine.run(signals=signals, prices=prices)
     assert results.shape[0] == 0
+
+
+def test_stop_loss_exits_early_on_large_drop():
+    """Position drops >10% → exits before hold_days."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 2, 15), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    prices_arr = []
+    for i, d in enumerate(dates):
+        if i < 3:
+            prices_arr.append(100.0)
+        elif i == 3:
+            prices_arr.append(84.0)   # -16% drop triggers 10% stop
+        else:
+            prices_arr.append(100.0)  # recovery (should not be used)
+    rows = [{"date": d, "ticker": "TST", "open": float(p), "close": float(p),
+             "adj_close": float(p), "adv_20d_usd": 5e9}
+            for d, p in zip(dates, prices_arr)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=20, initial_capital=100_000, stop_loss_pct=0.10)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 4)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    # Exit should happen on day 3 after entry (index 3 from entry_date+1 onwards), not day 20
+    exit_dt = date.fromisoformat(str(results["exit_date"][0]))
+    assert exit_dt < date(2024, 1, 15), f"Stop not triggered: exit={exit_dt}"
+    # PnL should reflect the -16% loss, not the recovery
+    assert results["pnl"][0] < -10_000
+
+
+def test_stop_loss_not_triggered_when_drop_is_small():
+    """Position drops 5% → no early exit, holds full hold_days."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 2, 15), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    # Drop 5% early, then flat — never hits -10% stop
+    prices_arr = [100.0 if i == 0 else 95.0 for i in range(len(dates))]
+    rows = [{"date": d, "ticker": "TST", "open": float(p), "close": float(p),
+             "adj_close": float(p), "adv_20d_usd": 5e9}
+            for d, p in zip(dates, prices_arr)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=10, initial_capital=100_000, stop_loss_pct=0.10)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 3)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    # Should hold full 10 days
+    exit_dt = date.fromisoformat(str(results["exit_date"][0]))
+    entry_dt = date(2024, 1, 3)
+    calendar_days = (exit_dt - entry_dt).days
+    assert calendar_days >= 12, f"Exited too early: {exit_dt}"
+
+
+def test_stop_loss_zero_disables_feature():
+    """stop_loss_pct=0.0 (default) → original behaviour, no early exit."""
+    prices = _make_prices(tickers=["AAPL"])
+    config = BacktestConfig(hold_days=5, initial_capital=100_000, stop_loss_pct=0.0)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["AAPL"], "entry_date": [date(2024, 1, 11)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1  # always produces a record when prices exist

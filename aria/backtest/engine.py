@@ -11,6 +11,7 @@ class BacktestConfig:
     initial_capital: float = 100_000_000
     cost_model: TransactionCostModel = field(default_factory=TransactionCostModel)
     max_gap_pct: float = 0.03
+    stop_loss_pct: float = 0.0
 
 @dataclass
 class Position:
@@ -63,17 +64,27 @@ class BacktestEngine:
             if future.shape[0] < self.config.hold_days:
                 continue
 
-            exit_date  = future["date"][self.config.hold_days - 1]
-            exit_price = float(future["close"][self.config.hold_days - 1])
+            direction = 1.0 if side == "long" else -1.0
+            stop_loss = self.config.stop_loss_pct
+            exit_idx  = self.config.hold_days - 1
+            if stop_loss > 0.0:
+                closes = future["close"].to_list()
+                for i, close in enumerate(closes[:self.config.hold_days]):
+                    cum_ret = direction * (close - entry_price) / entry_price
+                    if cum_ret < -stop_loss:
+                        exit_idx = i
+                        break
+
+            exit_date  = future["date"][exit_idx]
+            exit_price = float(future["close"][exit_idx])
 
             capital    = self.config.initial_capital * weight
             adv        = self._get_adv(prices, ticker, entry_date)
             cost_entry = capital * cost.total_cost_bps(capital, adv, True) / 10_000
             cost_exit  = capital * cost.total_cost_bps(capital, adv, True) / 10_000
             borrow     = (capital * cost.daily_borrow_cost_bps() / 10_000 *
-                          self.config.hold_days) if side == "short" else 0.0
+                          (exit_idx + 1)) if side == "short" else 0.0
 
-            direction    = 1.0 if side == "long" else -1.0
             gross_return = (exit_price - entry_price) / entry_price
             pnl = capital * direction * gross_return - cost_entry - cost_exit - borrow
 
