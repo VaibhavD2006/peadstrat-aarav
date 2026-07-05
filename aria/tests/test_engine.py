@@ -100,7 +100,7 @@ def test_stop_loss_exits_early_on_large_drop():
     assert results.shape[0] == 1
     # Exit should happen on day 3 after entry (index 3 from entry_date+1 onwards), not day 20
     exit_dt = date.fromisoformat(str(results["exit_date"][0]))
-    assert exit_dt < date(2024, 1, 15), f"Stop not triggered: exit={exit_dt}"
+    assert exit_dt == date(2024, 1, 5), f"Stop not triggered on expected day: {exit_dt}"
     # PnL should reflect the -16% loss, not the recovery
     assert results["pnl"][0] < -10_000
 
@@ -119,14 +119,14 @@ def test_stop_loss_not_triggered_when_drop_is_small():
     config = BacktestConfig(hold_days=10, initial_capital=100_000, stop_loss_pct=0.10)
     engine = BacktestEngine(config=config)
     signals = pl.DataFrame({
-        "ticker": ["TST"], "entry_date": [date(2024, 1, 3)],
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 2)],
         "side": ["long"], "weight": [1.0],
     })
     results = engine.run(signals=signals, prices=prices)
     assert results.shape[0] == 1
     # Should hold full 10 days
     exit_dt = date.fromisoformat(str(results["exit_date"][0]))
-    entry_dt = date(2024, 1, 3)
+    entry_dt = date(2024, 1, 2)
     calendar_days = (exit_dt - entry_dt).days
     assert calendar_days >= 12, f"Exited too early: {exit_dt}"
 
