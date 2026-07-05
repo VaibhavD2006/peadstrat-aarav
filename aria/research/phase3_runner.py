@@ -918,6 +918,7 @@ class Phase3Runner:
                 config = BacktestConfig(
                     hold_days=effective_hold,
                     initial_capital=self.initial_capital,
+                    stop_loss_pct=exp.stop_loss_pct,
                 )
 
                 # Map RMV_z -> FTS_z
