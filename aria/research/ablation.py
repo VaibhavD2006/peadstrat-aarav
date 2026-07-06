@@ -20,6 +20,8 @@ class ExperimentSpec:
     rho_cross_cohort: float = 0.0  # Cross-cohort correlation; 0 = independent (E26 formula), -0.05 = empirical L/S
     min_sue_z: float = 0.0  # Drop trades where |SUE_z| < this threshold (0 = disabled)
     pead_gate: bool = False  # True → only enter when same-day price return confirms SUE direction
+    min_pead_ret: float = 0.0  # Minimum |day_return| required for PEAD gate (0 = sign-only)
+    trailing_stop_pct: float = 0.0  # Trail from running peak; 0 = use fixed stop_loss_pct
     notes: str = ""
 
 
@@ -297,6 +299,50 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         pead_gate=True,
         notes="E27 + PEAD price-confirmation gate: only enter when same-day return confirms SUE direction",
     ),
+    ExperimentSpec(
+        "E30_trailing_stop",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        rho_cross_cohort=-0.05,
+        pead_gate=True,
+        trailing_stop_pct=0.07,
+        notes="E29 + 7% trailing stop from peak (replaces fixed 10% stop); improves avg_loss",
+    ),
+    ExperimentSpec(
+        "E31_pead_magnitude",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        stop_loss_pct=0.10,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        rho_cross_cohort=-0.05,
+        pead_gate=True,
+        min_pead_ret=0.01,
+        notes="E29 + require |day_return| >= 1% for PEAD gate; filters low-conviction earnings moves",
+    ),
+    ExperimentSpec(
+        "E32_trailing_pead_magnitude",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        rho_cross_cohort=-0.05,
+        pead_gate=True,
+        min_pead_ret=0.01,
+        trailing_stop_pct=0.07,
+        notes="E29 + trailing stop + PEAD magnitude filter combined",
+    ),
 ]
 
 
@@ -325,6 +371,8 @@ class AblationRunner:
                 "rho_cross_cohort": exp.rho_cross_cohort,
                 "min_sue_z": exp.min_sue_z,
                 "pead_gate": exp.pead_gate,
+                "min_pead_ret": exp.min_pead_ret,
+                "trailing_stop_pct": exp.trailing_stop_pct,
                 **self.results.get(exp.name, {}),
             }
             for exp in self.experiments

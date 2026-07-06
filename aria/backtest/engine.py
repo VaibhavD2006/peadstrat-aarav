@@ -12,6 +12,7 @@ class BacktestConfig:
     cost_model: TransactionCostModel = field(default_factory=TransactionCostModel)
     max_gap_pct: float = 0.03
     stop_loss_pct: float = 0.0
+    trailing_stop_pct: float = 0.0  # trail from running peak; 0 = disabled
 
 @dataclass
 class Position:
@@ -64,14 +65,21 @@ class BacktestEngine:
             if future.shape[0] < self.config.hold_days:
                 continue
 
-            direction = 1.0 if side == "long" else -1.0
-            stop_loss = self.config.stop_loss_pct
-            exit_idx  = self.config.hold_days - 1
-            if stop_loss > 0.0:
+            direction   = 1.0 if side == "long" else -1.0
+            stop_loss   = self.config.stop_loss_pct
+            trail_stop  = self.config.trailing_stop_pct
+            exit_idx    = self.config.hold_days - 1
+            if stop_loss > 0.0 or trail_stop > 0.0:
                 closes = future["close"].to_list()
+                peak_cum_ret = 0.0
                 for i, close in enumerate(closes[:self.config.hold_days]):
                     cum_ret = direction * (close - entry_price) / entry_price
-                    if cum_ret < -stop_loss:
+                    if trail_stop > 0.0:
+                        peak_cum_ret = max(peak_cum_ret, cum_ret)
+                        if cum_ret < peak_cum_ret - trail_stop:
+                            exit_idx = i
+                            break
+                    elif cum_ret < -stop_loss:
                         exit_idx = i
                         break
 

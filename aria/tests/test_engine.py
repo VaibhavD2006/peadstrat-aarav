@@ -142,3 +142,61 @@ def test_stop_loss_zero_disables_feature():
     })
     results = engine.run(signals=signals, prices=prices)
     assert results.shape[0] == 1  # always produces a record when prices exist
+
+
+def test_trailing_stop_exits_after_peak_reversal():
+    """Price runs up 10% then drops 8% from peak → trailing stop triggers before hold end."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 2, 15), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    # Entry open = 100; closes: rise to 110 over 5 days, then drop to 101.2 (8% off peak)
+    closes = [100.0] * len(dates)
+    for i in range(len(dates)):
+        if i < 5:
+            closes[i] = 100.0 + i * 2.0   # 100, 102, 104, 106, 108, 110
+        elif i == 5:
+            closes[i] = 110.0
+        else:
+            closes[i] = max(110.0 - (i - 5) * 1.8, 80.0)  # falls from 110
+    rows = [{"date": d, "ticker": "TST", "open": float(c * 0.999), "close": float(c),
+             "adj_close": float(c), "adv_20d_usd": 5e9}
+            for d, c in zip(dates, closes)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=20, initial_capital=100_000, trailing_stop_pct=0.07)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 2)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    exit_dt = date.fromisoformat(str(results["exit_date"][0]))
+    # Should exit before day 20 once price drops 7% from peak of 110 (i.e. below 102.3)
+    assert exit_dt < dates[20], f"Trailing stop not triggered: {exit_dt}"
+    # PnL should be positive (exited while still above entry)
+    assert results["pnl"][0] > 0, "Should have positive PnL on trailing stop exit"
+
+
+def test_trailing_stop_acts_as_downside_stop_when_no_peak():
+    """Price drops immediately — trailing stop from peak=0 acts like a fixed stop at trail_pct."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 2, 15), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    # Immediate 10% drop, then flat
+    closes = [100.0 if i == 0 else 90.0 for i in range(len(dates))]
+    rows = [{"date": d, "ticker": "TST", "open": float(c), "close": float(c),
+             "adj_close": float(c), "adv_20d_usd": 5e9}
+            for d, c in zip(dates, closes)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=20, initial_capital=100_000, trailing_stop_pct=0.07)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 2)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    exit_dt = date.fromisoformat(str(results["exit_date"][0]))
+    # -10% drop triggers 7% trail stop immediately
+    assert exit_dt == dates[1], f"Should exit on first day of drop: {exit_dt}"
+    assert results["pnl"][0] < 0

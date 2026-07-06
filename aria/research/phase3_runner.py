@@ -941,6 +941,7 @@ class Phase3Runner:
                     hold_days=effective_hold,
                     initial_capital=self.initial_capital,
                     stop_loss_pct=exp.stop_loss_pct,
+                    trailing_stop_pct=exp.trailing_stop_pct,
                 )
 
                 # Map RMV_z -> FTS_z
@@ -970,8 +971,11 @@ class Phase3Runner:
 
                 # PEAD gate: only enter when same-day price return confirms SUE direction
                 if exp.pead_gate and pead_gate_map:
-                    longs  = [t for t in longs  if pead_gate_map.get(t, 0.0) > 0]
-                    shorts = [t for t in shorts if pead_gate_map.get(t, 0.0) < 0]
+                    threshold = exp.min_pead_ret
+                    longs  = [t for t in longs
+                               if pead_gate_map.get(t, 0.0) >= threshold]
+                    shorts = [t for t in shorts
+                               if pead_gate_map.get(t, 0.0) <= -threshold]
 
                 # BSQ filter
                 if exp.bsq_filter and not bsq_elig_df.is_empty():
