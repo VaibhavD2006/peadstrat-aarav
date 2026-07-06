@@ -67,7 +67,7 @@ def compute_sue_raw(
         normalizer = max(float(np.std(hist_errors, ddof=1)), fallback_scale)
         return surprise / normalizer
 
-    if forecast_std is not None and forecast_std > fallback_scale:
+    if forecast_std is not None and forecast_std >= fallback_scale:
         return surprise / forecast_std
 
     denom = max(abs(consensus_eps), fallback_scale)
