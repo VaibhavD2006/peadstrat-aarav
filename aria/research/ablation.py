@@ -343,6 +343,21 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         trailing_stop_pct=0.07,
         notes="E29 + trailing stop + PEAD magnitude filter combined",
     ),
+    ExperimentSpec(
+        "E33_wide_trail",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        rho_cross_cohort=-0.05,
+        pead_gate=True,
+        min_pead_ret=0.01,
+        trailing_stop_pct=0.12,
+        notes="E31 + wider 12% trailing stop; avoids premature exits on normal vol fluctuations",
+    ),
 ]
 
 
