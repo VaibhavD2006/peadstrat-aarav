@@ -15,6 +15,7 @@ class ExperimentSpec:
     beta_neutral: bool = False
     vol_target: float = 0.0   # 0 = disabled; >0 = target annualised portfolio vol
     stop_loss_pct: float = 0.0   # 0 = disabled; e.g. 0.10 = 10% per-position stop
+    use_revision_weight: bool = False  # True → apply revision_dir as weight multiplier
     notes: str = ""
 
 
@@ -224,6 +225,7 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         bsq_filter=True,
         vol_target=0.15,
         stop_loss_pct=0.10,
+        use_revision_weight=True,
         notes="E23 + EPS revision direction proxy filter",
     ),
     ExperimentSpec(
@@ -234,6 +236,7 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         bsq_filter=True,
         vol_target=0.15,
         stop_loss_pct=0.10,
+        use_revision_weight=True,
         notes="Full Phase 1+2 stack: E23 + revision direction + magnitude combined",
     ),
 ]
@@ -259,6 +262,7 @@ class AblationRunner:
                 "beta_neutral": exp.beta_neutral,
                 "vol_target": exp.vol_target,
                 "stop_loss_pct": exp.stop_loss_pct,
+                "use_revision_weight": exp.use_revision_weight,
                 **self.results.get(exp.name, {}),
             }
             for exp in self.experiments

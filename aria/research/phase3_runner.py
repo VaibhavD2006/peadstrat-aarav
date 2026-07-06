@@ -34,7 +34,7 @@ from aria.data.ingestion.simfin_loader import (
 )
 from aria.data.ingestion.edgar_loader import get_sic_map
 from aria.data.ingestion.yfinance_earnings import load_earnings_dates, build_announce_map
-from aria.data.ingestion.sue_loader import load_consensus, get_sue_inputs
+from aria.data.ingestion.sue_loader import load_consensus, get_sue_inputs, compute_revision_dir
 from aria.portfolio.scorer import CompositeScorer
 from aria.research.ablation import ABLATION_MATRIX, AblationRunner, ExperimentSpec
 from aria.signals.esqs import ESQSSignal
@@ -876,6 +876,12 @@ class Phase3Runner:
                             pl.col("SUE_z_new").fill_null(0.0).alias("SUE_z")
                         ).drop("SUE_z_new")
 
+            # Compute revision direction map for this cohort (used in Phase 2 sizing)
+            revision_dir_map: dict[str, float] = {}
+            if has_sue and consensus_df is not None:
+                for t in present:
+                    revision_dir_map[t] = compute_revision_dir(t, entry_date, consensus_df)
+
             # Prices for exit window (generous buffer for 20d hold)
             max_hold = max(self.hold_days, 25)
             win_prices = self.price_store.get(
@@ -951,15 +957,41 @@ class Phase3Runner:
                     ticker_vols = self._compute_ticker_vols(
                         longs + shorts, all_prices, entry_date
                     )
+                    # Inverse-vol base weights
                     lw = {t: 1.0 / max(ticker_vols.get(t, 0.30), 0.05) for t in longs}
                     sw = {t: 1.0 / max(ticker_vols.get(t, 0.30), 0.05) for t in shorts}
-                    lt = sum(lw.values())
+
+                    # SUE magnitude tilt: |SUE_z| ∈ [0.5, 3.0]
+                    if "SUE_z" in exp.signals:
+                        sue_z_map = dict(zip(base["ticker"].to_list(), base["SUE_z"].to_list()))
+                        for t in longs:
+                            lw[t] *= float(np.clip(abs(sue_z_map.get(t, 1.0)), 0.5, 3.0))
+                        for t in shorts:
+                            sw[t] *= float(np.clip(abs(sue_z_map.get(t, 1.0)), 0.5, 3.0))
+
+                    # Revision direction tilt (E24/E25)
+                    if exp.use_revision_weight and revision_dir_map:
+                        filtered_longs = []
+                        for t in longs:
+                            rd = revision_dir_map.get(t, 0.0)
+                            if rd >= -0.5:
+                                lw[t] *= (1.0 + 0.5 * rd)
+                                filtered_longs.append(t)
+                        longs = filtered_longs
+                        for t in shorts:
+                            rd = revision_dir_map.get(t, 0.0)
+                            sw[t] *= (1.0 - 0.5 * rd)
+                        if not longs:
+                            continue
+
+                    # Normalise each side to sum=1
+                    lt = sum(lw[t] for t in longs)
                     st = sum(sw.values())
-                    long_w = {t: v / lt for t, v in lw.items()}
+                    long_w  = {t: lw[t] / lt for t in longs}
                     short_w = {t: v / st for t, v in sw.items()}
-                    scale = self._vol_target_scale(
-                        longs, shorts, ticker_vols, exp.vol_target
-                    )
+
+                    # Scale to hit vol target using corrected L/S formula
+                    scale   = self._vol_target_scale(longs, shorts, ticker_vols, exp.vol_target)
                     long_w  = {t: w * scale for t, w in long_w.items()}
                     short_w = {t: w * scale for t, w in short_w.items()}
                 elif exp.beta_neutral and not spy_returns.is_empty():
