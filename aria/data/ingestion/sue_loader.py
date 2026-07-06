@@ -13,10 +13,11 @@ Where:
     std_eps             — (optional) standard deviation of estimates; used as
                           normalizer instead of abs(consensus) when available
 """
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import polars as pl
 
 from aria.signals.sue import compute_sue_raw
@@ -107,6 +108,40 @@ def compute_historical_errors(
     if prior.is_empty():
         return []
     return (prior["actual_eps"] - prior["consensus_eps"]).to_list()
+
+
+def compute_revision_dir(
+    ticker: str,
+    report_date: date,
+    consensus_df: pl.DataFrame,
+) -> float:
+    """EPS revision direction proxy: (current_consensus - prior_year_consensus) / |prior|.
+
+    Compares this quarter's analyst consensus against the same fiscal quarter
+    one year ago (report_date ± 320-410 days). Returns float in [-1, 1]:
+      positive = analysts raised expectations YoY (bullish signal)
+      negative = analysts cut expectations YoY (bearish signal)
+      0.0      = insufficient history
+    """
+    rows = consensus_df.filter(pl.col("ticker") == ticker).sort("report_date")
+
+    current = rows.filter(pl.col("report_date") == report_date)
+    if current.is_empty():
+        return 0.0
+    current_consensus = float(current["consensus_eps"][0])
+
+    prior_window = rows.filter(
+        (pl.col("report_date") >= report_date - timedelta(days=410)) &
+        (pl.col("report_date") <= report_date - timedelta(days=320))
+    )
+    if prior_window.is_empty():
+        return 0.0
+    prior_consensus = float(prior_window["consensus_eps"][-1])
+    if abs(prior_consensus) < 0.01:
+        return 0.0
+
+    raw = (current_consensus - prior_consensus) / abs(prior_consensus)
+    return float(np.clip(raw, -1.0, 1.0))
 
 
 def get_sue_inputs(

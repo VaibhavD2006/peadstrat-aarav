@@ -288,3 +288,69 @@ def test_get_sue_inputs_uses_historical_errors_in_normalizer():
     expected_norm = max(float(np.std(hist, ddof=1)), 0.01)
     expected_sue = (1.4 - 1.5) / expected_norm
     assert abs(rows[0]["sue_raw"] - expected_sue) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# sue_loader: compute_revision_dir
+# ---------------------------------------------------------------------------
+
+from aria.data.ingestion.sue_loader import compute_revision_dir
+
+def _make_revision_df():
+    """4 quarters of AAPL: consensus rising YoY."""
+    return pl.DataFrame({
+        "ticker": ["AAPL"] * 4,
+        "report_date": [
+            date(2022, 10, 1),   # Q3 2022
+            date(2023, 1, 15),   # Q4 2022
+            date(2023, 10, 1),   # Q3 2023 (~365 days after Q3 2022)
+            date(2024, 1, 15),   # Q4 2023
+        ],
+        "consensus_eps": [1.00, 1.20, 1.30, 1.50],
+        "actual_eps":    [1.10, 1.25, 1.35, 1.55],
+    })
+
+
+def test_revision_dir_positive_when_consensus_raised():
+    """Q3 2023 consensus (1.30) > Q3 2022 consensus (1.00) → positive."""
+    df = _make_revision_df()
+    val = compute_revision_dir("AAPL", date(2023, 10, 1), df)
+    assert val > 0, f"Expected positive revision, got {val}"
+    assert val == pytest.approx((1.30 - 1.00) / 1.00, abs=0.01)
+
+
+def test_revision_dir_negative_when_consensus_cut():
+    """Prior year consensus was higher → negative revision."""
+    df = pl.DataFrame({
+        "ticker": ["AAPL"] * 2,
+        "report_date": [date(2022, 10, 1), date(2023, 10, 1)],
+        "consensus_eps": [1.50, 1.20],   # cut YoY
+        "actual_eps":    [1.55, 1.25],
+    })
+    val = compute_revision_dir("AAPL", date(2023, 10, 1), df)
+    assert val < 0
+
+
+def test_revision_dir_returns_zero_for_missing_prior():
+    """No prior-year row → returns 0.0."""
+    df = _make_revision_df()
+    val = compute_revision_dir("AAPL", date(2022, 10, 1), df)
+    assert val == 0.0
+
+
+def test_revision_dir_clipped_to_minus_one_plus_one():
+    """Very large change is clipped to [-1, 1]."""
+    df = pl.DataFrame({
+        "ticker": ["AAPL"] * 2,
+        "report_date": [date(2022, 10, 1), date(2023, 10, 1)],
+        "consensus_eps": [0.10, 5.00],  # 50x increase → raw=49 → clipped to 1.0
+        "actual_eps":    [0.10, 5.00],
+    })
+    val = compute_revision_dir("AAPL", date(2023, 10, 1), df)
+    assert val == pytest.approx(1.0)
+
+
+def test_revision_dir_returns_zero_for_unknown_ticker():
+    df = _make_revision_df()
+    val = compute_revision_dir("UNKNOWN", date(2023, 10, 1), df)
+    assert val == 0.0
