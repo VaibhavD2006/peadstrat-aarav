@@ -998,7 +998,10 @@ class Phase3Runner:
                             1 for d in all_sorted_dates
                             if entry_date - timedelta(days=hold_cal) <= d <= entry_date
                         )
-                        vol_tgt = exp.vol_target / max(np.sqrt(n_concurrent), 1.0)
+                        rho = exp.rho_cross_cohort
+                        eff_var = n_concurrent * (1.0 + (n_concurrent - 1) * rho)
+                        denom = np.sqrt(max(eff_var, 0.01))
+                        vol_tgt = exp.vol_target / denom
                     scale   = self._vol_target_scale(longs, shorts, ticker_vols, vol_tgt)
                     long_w  = {t: w * scale for t, w in long_w.items()}
                     short_w = {t: w * scale for t, w in short_w.items()}

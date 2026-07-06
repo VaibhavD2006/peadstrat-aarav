@@ -17,6 +17,7 @@ class ExperimentSpec:
     stop_loss_pct: float = 0.0   # 0 = disabled; e.g. 0.10 = 10% per-position stop
     use_revision_weight: bool = False  # True → apply revision_dir as weight multiplier
     concurrent_vol_adjust: bool = False  # True → divide vol target by sqrt(n concurrent cohorts)
+    rho_cross_cohort: float = 0.0  # Cross-cohort correlation; 0 = independent (E26 formula), -0.05 = empirical L/S
     notes: str = ""
 
 
@@ -250,7 +251,21 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         stop_loss_pct=0.10,
         use_revision_weight=True,
         concurrent_vol_adjust=True,
-        notes="E25 + portfolio-level vol control: divide per-cohort target by sqrt(n_concurrent cohorts)",
+        rho_cross_cohort=0.0,
+        notes="E25 + portfolio-level vol control: divide per-cohort target by sqrt(n_concurrent); rho=0 (over-corrects)",
+    ),
+    ExperimentSpec(
+        "E27_portfolio_vol_fix_v2",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        stop_loss_pct=0.10,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        rho_cross_cohort=-0.05,
+        notes="E26 + corrected cross-cohort rho=-0.05; denom=sqrt(k(1+(k-1)rho)); targets 15% portfolio vol",
     ),
 ]
 
@@ -277,6 +292,7 @@ class AblationRunner:
                 "stop_loss_pct": exp.stop_loss_pct,
                 "use_revision_weight": exp.use_revision_weight,
                 "concurrent_vol_adjust": exp.concurrent_vol_adjust,
+                "rho_cross_cohort": exp.rho_cross_cohort,
                 **self.results.get(exp.name, {}),
             }
             for exp in self.experiments
