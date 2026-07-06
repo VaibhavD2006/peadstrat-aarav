@@ -19,6 +19,7 @@ class ExperimentSpec:
     concurrent_vol_adjust: bool = False  # True → divide vol target by sqrt(n concurrent cohorts)
     rho_cross_cohort: float = 0.0  # Cross-cohort correlation; 0 = independent (E26 formula), -0.05 = empirical L/S
     min_sue_z: float = 0.0  # Drop trades where |SUE_z| < this threshold (0 = disabled)
+    pead_gate: bool = False  # True → only enter when same-day price return confirms SUE direction
     notes: str = ""
 
 
@@ -282,6 +283,20 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         min_sue_z=0.5,
         notes="E27 + drop trades where |SUE_z| < 0.5 to filter near-zero signals and improve IC",
     ),
+    ExperimentSpec(
+        "E29_pead_gate",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        stop_loss_pct=0.10,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        rho_cross_cohort=-0.05,
+        pead_gate=True,
+        notes="E27 + PEAD price-confirmation gate: only enter when same-day return confirms SUE direction",
+    ),
 ]
 
 
@@ -309,6 +324,7 @@ class AblationRunner:
                 "concurrent_vol_adjust": exp.concurrent_vol_adjust,
                 "rho_cross_cohort": exp.rho_cross_cohort,
                 "min_sue_z": exp.min_sue_z,
+                "pead_gate": exp.pead_gate,
                 **self.results.get(exp.name, {}),
             }
             for exp in self.experiments

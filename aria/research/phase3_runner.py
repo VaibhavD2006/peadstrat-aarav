@@ -902,6 +902,22 @@ class Phase3Runner:
                 max(self.hold_days, 20), ic_signal_cols
             )
 
+            # Same-day return map for PEAD confirmation gate (price reaction on event date)
+            pead_gate_needed = any(e.pead_gate for e in experiments)
+            pead_gate_map: dict[str, float] = {}
+            if pead_gate_needed:
+                prev_p = (
+                    all_prices
+                    .filter(pl.col("ticker").is_in(win_tickers) & (pl.col("date") <= entry_date))
+                    .sort("date")
+                    .group_by("ticker")
+                    .tail(2)
+                )
+                for tkr in win_tickers:
+                    closes = prev_p.filter(pl.col("ticker") == tkr)["adj_close"].to_list()
+                    if len(closes) >= 2 and closes[-2] > 0:
+                        pead_gate_map[tkr] = (closes[-1] - closes[-2]) / closes[-2]
+
             # Rolling HMM regime
             regime_ok = self._rolling_hmm.is_allowed(mkt_prices, entry_date)
 
@@ -951,6 +967,11 @@ class Phase3Runner:
                                        [abs(v) for v in base["SUE_z"].to_list()]))
                     longs  = [t for t in longs  if sue_abs.get(t, 0.0) >= exp.min_sue_z]
                     shorts = [t for t in shorts if sue_abs.get(t, 0.0) >= exp.min_sue_z]
+
+                # PEAD gate: only enter when same-day price return confirms SUE direction
+                if exp.pead_gate and pead_gate_map:
+                    longs  = [t for t in longs  if pead_gate_map.get(t, 0.0) > 0]
+                    shorts = [t for t in shorts if pead_gate_map.get(t, 0.0) < 0]
 
                 # BSQ filter
                 if exp.bsq_filter and not bsq_elig_df.is_empty():
@@ -1084,8 +1105,16 @@ class Phase3Runner:
             metrics = self._pa.summarize(rets)
 
             wins = int((combined["pnl"] > 0).sum())
-            metrics["n_trades"] = n_trades
-            metrics["win_rate"] = round(wins / n_trades, 3) if n_trades > 0 else float("nan")
+            win_pnl  = combined.filter(pl.col("pnl") > 0)["pnl"]
+            loss_pnl = combined.filter(pl.col("pnl") < 0)["pnl"]
+            avg_win  = float(win_pnl.mean())  if win_pnl.len()  > 0 else float("nan")
+            avg_loss = float(loss_pnl.mean()) if loss_pnl.len() > 0 else float("nan")
+            rr = abs(avg_win / avg_loss) if avg_loss != 0 and not np.isnan(avg_loss) else float("nan")
+            metrics["n_trades"]      = n_trades
+            metrics["win_rate"]      = round(wins / n_trades, 3) if n_trades > 0 else float("nan")
+            metrics["avg_win"]       = round(avg_win,  2) if not np.isnan(avg_win)  else float("nan")
+            metrics["avg_loss"]      = round(avg_loss, 2) if not np.isnan(avg_loss) else float("nan")
+            metrics["rr_ratio"]      = round(rr, 3)       if not np.isnan(rr)       else float("nan")
             metrics["rmv_available"] = False
             metrics["regime_filter"] = exp.regime_filter
             metrics["ivrs_multiplier"] = exp.ivrs_multiplier
@@ -1113,10 +1142,13 @@ class Phase3Runner:
                 ic_key = "IC_BSQ_z"
             else:
                 ic_key = "IC_ESQS_z"
-            ic_val = metrics.get(ic_key, float("nan"))
+            ic_val  = metrics.get(ic_key, float("nan"))
+            wr      = metrics.get("win_rate", float("nan"))
+            rr_val  = metrics.get("rr_ratio",  float("nan"))
             vol_str = f"  VolTgt={exp.vol_target:.0%}" if exp.vol_target > 0 else ""
             print(f"  {exp.name:<32}  Sharpe={sr:+.2f}  AnnRet={ar:+.1%}  "
-                  f"MaxDD={dd:.1%}  N={n_trades}  IC={ic_val:+.3f}{vol_str}")
+                  f"MaxDD={dd:.1%}  N={n_trades}  IC={ic_val:+.3f}  "
+                  f"WR={wr:.1%}  RR={rr_val:.2f}{vol_str}")
 
         print(f"\n{'='*60}")
         print("[Phase3/4] Done.")
