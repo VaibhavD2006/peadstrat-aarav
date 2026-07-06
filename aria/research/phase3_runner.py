@@ -991,7 +991,15 @@ class Phase3Runner:
                     short_w = {t: v / st for t, v in sw.items()}
 
                     # Scale to hit vol target using corrected L/S formula
-                    scale   = self._vol_target_scale(longs, shorts, ticker_vols, exp.vol_target)
+                    vol_tgt = exp.vol_target
+                    if exp.concurrent_vol_adjust:
+                        hold_cal = int(effective_hold * 1.45)
+                        n_concurrent = sum(
+                            1 for d in all_sorted_dates
+                            if entry_date - timedelta(days=hold_cal) <= d <= entry_date
+                        )
+                        vol_tgt = exp.vol_target / max(np.sqrt(n_concurrent), 1.0)
+                    scale   = self._vol_target_scale(longs, shorts, ticker_vols, vol_tgt)
                     long_w  = {t: w * scale for t, w in long_w.items()}
                     short_w = {t: w * scale for t, w in short_w.items()}
                 elif exp.beta_neutral and not spy_returns.is_empty():

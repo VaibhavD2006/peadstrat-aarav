@@ -16,6 +16,7 @@ class ExperimentSpec:
     vol_target: float = 0.0   # 0 = disabled; >0 = target annualised portfolio vol
     stop_loss_pct: float = 0.0   # 0 = disabled; e.g. 0.10 = 10% per-position stop
     use_revision_weight: bool = False  # True → apply revision_dir as weight multiplier
+    concurrent_vol_adjust: bool = False  # True → divide vol target by sqrt(n concurrent cohorts)
     notes: str = ""
 
 
@@ -239,6 +240,18 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         use_revision_weight=True,
         notes="Full Phase 1+2 stack: E23 + revision direction + magnitude combined",
     ),
+    ExperimentSpec(
+        "E26_portfolio_vol_fix",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        stop_loss_pct=0.10,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        notes="E25 + portfolio-level vol control: divide per-cohort target by sqrt(n_concurrent cohorts)",
+    ),
 ]
 
 
@@ -263,6 +276,7 @@ class AblationRunner:
                 "vol_target": exp.vol_target,
                 "stop_loss_pct": exp.stop_loss_pct,
                 "use_revision_weight": exp.use_revision_weight,
+                "concurrent_vol_adjust": exp.concurrent_vol_adjust,
                 **self.results.get(exp.name, {}),
             }
             for exp in self.experiments
