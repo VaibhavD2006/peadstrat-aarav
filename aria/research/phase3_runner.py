@@ -999,8 +999,9 @@ class Phase3Runner:
                             if entry_date - timedelta(days=hold_cal) <= d <= entry_date
                         )
                         rho = exp.rho_cross_cohort
-                        eff_var = n_concurrent * (1.0 + (n_concurrent - 1) * rho)
-                        denom = np.sqrt(max(eff_var, 0.01))
+                        # Floor at 1.0: rho=-0.05 is invalid for n>21; effective diversification can't exceed single-cohort
+                        eff_var = max(n_concurrent * (1.0 + (n_concurrent - 1) * rho), 1.0)
+                        denom = np.sqrt(eff_var)
                         vol_tgt = exp.vol_target / denom
                     scale   = self._vol_target_scale(longs, shorts, ticker_vols, vol_tgt)
                     long_w  = {t: w * scale for t, w in long_w.items()}
