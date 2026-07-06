@@ -945,6 +945,13 @@ class Phase3Runner:
 
                 longs, shorts = scorer.select_long_short(scored, self.top_pct, self.bottom_pct)
 
+                # |SUE_z| threshold: drop near-zero signals
+                if exp.min_sue_z > 0 and "SUE_z" in base.columns:
+                    sue_abs = dict(zip(base["ticker"].to_list(),
+                                       [abs(v) for v in base["SUE_z"].to_list()]))
+                    longs  = [t for t in longs  if sue_abs.get(t, 0.0) >= exp.min_sue_z]
+                    shorts = [t for t in shorts if sue_abs.get(t, 0.0) >= exp.min_sue_z]
+
                 # BSQ filter
                 if exp.bsq_filter and not bsq_elig_df.is_empty():
                     longs, shorts = bsq_signal.apply_filter(longs, shorts, bsq_elig_df)
