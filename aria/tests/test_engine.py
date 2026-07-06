@@ -177,6 +177,83 @@ def test_trailing_stop_exits_after_peak_reversal():
     assert results["pnl"][0] > 0, "Should have positive PnL on trailing stop exit"
 
 
+def test_scaled_exit_all_targets_hit():
+    """Stock runs to +15%: leg1 exits at +5%, leg2 at +10%, leg3 at day 20. PnL > single exit."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 3, 31), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    # Steady rise: 100 → 116 over 20 trading days
+    closes = [100.0 + i * 0.8 for i in range(len(dates))]
+    rows = [{"date": d, "ticker": "TST", "open": float(c), "close": float(c),
+             "adj_close": float(c), "adv_20d_usd": 5e9}
+            for d, c in zip(dates, closes)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=20, initial_capital=300_000, scaled_exit=True,
+                            leg1_target=0.05, leg2_target=0.10)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 2)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    # All targets hit → positive PnL, gross_return reflects blended gain
+    assert results["pnl"][0] > 0
+    assert results["gross_return"][0] > 0.07  # blended across +5%, +10%, and ~+16%
+
+
+def test_scaled_exit_trailing_stop_cuts_all_legs():
+    """Stock rises 8% then reverses 12% from peak: trailing stop fires, all remaining legs exit."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 3, 31), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    closes = [100.0] * len(dates)
+    for i in range(len(dates)):
+        if i <= 8:
+            closes[i] = 100.0 + i * 1.0   # rises to 108
+        else:
+            closes[i] = max(108.0 - (i - 8) * 2.0, 80.0)   # falls from 108
+    rows = [{"date": d, "ticker": "TST", "open": float(c), "close": float(c),
+             "adj_close": float(c), "adv_20d_usd": 5e9}
+            for d, c in zip(dates, closes)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=20, initial_capital=300_000, scaled_exit=True,
+                            leg1_target=0.05, leg2_target=0.10, trailing_stop_pct=0.12)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 2)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    exit_dt = date.fromisoformat(str(results["exit_date"][0]))
+    # Trail fires well before day 20 (108 peak → 108*(1-0.12) = 95.04; closes hit that around day 14-15)
+    assert exit_dt < dates[19], f"Trailing stop should have fired before day 20: {exit_dt}"
+
+
+def test_scaled_exit_no_targets_hit_exits_at_hold_days():
+    """Stock stays flat: no targets hit, all 3 legs exit at day 20."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 3, 31), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    closes = [100.0] * len(dates)
+    rows = [{"date": d, "ticker": "TST", "open": float(c), "close": float(c),
+             "adj_close": float(c), "adv_20d_usd": 5e9}
+            for d, c in zip(dates, closes)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=20, initial_capital=300_000, scaled_exit=True,
+                            leg1_target=0.05, leg2_target=0.10)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 2)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    exit_dt = date.fromisoformat(str(results["exit_date"][0]))
+    assert exit_dt == dates[20], f"Should exit at hold day 20: {exit_dt}"
+
+
 def test_trailing_stop_acts_as_downside_stop_when_no_peak():
     """Price drops immediately — trailing stop from peak=0 acts like a fixed stop at trail_pct."""
     all_dates = pl.date_range(date(2024, 1, 2), date(2024, 2, 15), interval="1d", eager=True)

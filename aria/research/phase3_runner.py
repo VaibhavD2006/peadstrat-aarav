@@ -942,6 +942,9 @@ class Phase3Runner:
                     initial_capital=self.initial_capital,
                     stop_loss_pct=exp.stop_loss_pct,
                     trailing_stop_pct=exp.trailing_stop_pct,
+                    scaled_exit=exp.scaled_exit,
+                    leg1_target=exp.leg1_target,
+                    leg2_target=exp.leg2_target,
                 )
 
                 # Map RMV_z -> FTS_z

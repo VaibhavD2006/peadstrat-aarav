@@ -13,6 +13,9 @@ class BacktestConfig:
     max_gap_pct: float = 0.03
     stop_loss_pct: float = 0.0
     trailing_stop_pct: float = 0.0  # trail from running peak; 0 = disabled
+    scaled_exit: bool = False        # True → ⅓ at leg1_target, ⅓ at leg2_target, ⅓ at hold_days
+    leg1_target: float = 0.05       # direction-adjusted return trigger for first third
+    leg2_target: float = 0.10       # direction-adjusted return trigger for second third
 
 @dataclass
 class Position:
@@ -65,36 +68,79 @@ class BacktestEngine:
             if future.shape[0] < self.config.hold_days:
                 continue
 
-            direction   = 1.0 if side == "long" else -1.0
-            stop_loss   = self.config.stop_loss_pct
-            trail_stop  = self.config.trailing_stop_pct
-            exit_idx    = self.config.hold_days - 1
-            if stop_loss > 0.0 or trail_stop > 0.0:
-                closes = future["close"].to_list()
-                peak_cum_ret = 0.0
-                for i, close in enumerate(closes[:self.config.hold_days]):
-                    cum_ret = direction * (close - entry_price) / entry_price
-                    if trail_stop > 0.0:
-                        peak_cum_ret = max(peak_cum_ret, cum_ret)
-                        if cum_ret < peak_cum_ret - trail_stop:
-                            exit_idx = i
-                            break
-                    elif cum_ret < -stop_loss:
-                        exit_idx = i
-                        break
-
-            exit_date  = future["date"][exit_idx]
-            exit_price = float(future["close"][exit_idx])
-
+            direction  = 1.0 if side == "long" else -1.0
+            stop_loss  = self.config.stop_loss_pct
+            trail_stop = self.config.trailing_stop_pct
+            hold       = self.config.hold_days
             capital    = self.config.initial_capital * weight
             adv        = self._get_adv(prices, ticker, entry_date)
-            cost_entry = capital * cost.total_cost_bps(capital, adv, True) / 10_000
-            cost_exit  = capital * cost.total_cost_bps(capital, adv, True) / 10_000
-            borrow     = (capital * cost.daily_borrow_cost_bps() / 10_000 *
-                          (exit_idx + 1)) if side == "short" else 0.0
 
-            gross_return = (exit_price - entry_price) / entry_price
-            pnl = capital * direction * gross_return - cost_entry - cost_exit - borrow
+            closes = future["close"].to_list()
+
+            if self.config.scaled_exit:
+                # ⅓ exits at leg1_target, ⅓ at leg2_target, ⅓ at hold_days (with trail)
+                leg_exits = [hold - 1, hold - 1, hold - 1]
+                peak_cum_ret = 0.0
+                leg1_hit = leg2_hit = False
+                for i, close in enumerate(closes[:hold]):
+                    cum_ret = direction * (close - entry_price) / entry_price
+                    peak_cum_ret = max(peak_cum_ret, cum_ret)
+                    if not leg1_hit and cum_ret >= self.config.leg1_target:
+                        leg_exits[0] = i
+                        leg1_hit = True
+                    if not leg2_hit and cum_ret >= self.config.leg2_target:
+                        leg_exits[1] = i
+                        leg2_hit = True
+                    # trailing/fixed stop fires on all remaining legs
+                    stop_hit = (trail_stop > 0.0 and cum_ret < peak_cum_ret - trail_stop) or \
+                               (stop_loss > 0.0 and cum_ret < -stop_loss)
+                    if stop_hit:
+                        if not leg1_hit:
+                            leg_exits[0] = i
+                        if not leg2_hit:
+                            leg_exits[1] = i
+                        leg_exits[2] = i
+                        break
+
+                leg_cap = capital / 3.0
+                leg_cost_entry = capital * cost.total_cost_bps(capital, adv, True) / 10_000 / 3.0
+                total_pnl = 0.0
+                for li in leg_exits:
+                    lp = float(closes[li])
+                    lg = direction * (lp - entry_price) / entry_price
+                    lc_exit = leg_cap * cost.total_cost_bps(leg_cap, adv, True) / 10_000
+                    lb = (leg_cap * cost.daily_borrow_cost_bps() / 10_000 * (li + 1)) if side == "short" else 0.0
+                    total_pnl += leg_cap * lg - leg_cost_entry - lc_exit - lb
+
+                exit_idx   = max(leg_exits)
+                exit_date  = future["date"][exit_idx]
+                exit_price = float(closes[exit_idx])
+                gross_return = total_pnl / capital   # blended return on full capital
+                pnl = total_pnl
+
+            else:
+                exit_idx = hold - 1
+                if stop_loss > 0.0 or trail_stop > 0.0:
+                    peak_cum_ret = 0.0
+                    for i, close in enumerate(closes[:hold]):
+                        cum_ret = direction * (close - entry_price) / entry_price
+                        if trail_stop > 0.0:
+                            peak_cum_ret = max(peak_cum_ret, cum_ret)
+                            if cum_ret < peak_cum_ret - trail_stop:
+                                exit_idx = i
+                                break
+                        elif cum_ret < -stop_loss:
+                            exit_idx = i
+                            break
+
+                exit_date  = future["date"][exit_idx]
+                exit_price = float(closes[exit_idx])
+                cost_entry = capital * cost.total_cost_bps(capital, adv, True) / 10_000
+                cost_exit  = capital * cost.total_cost_bps(capital, adv, True) / 10_000
+                borrow     = (capital * cost.daily_borrow_cost_bps() / 10_000 *
+                              (exit_idx + 1)) if side == "short" else 0.0
+                gross_return = (exit_price - entry_price) / entry_price
+                pnl = capital * direction * gross_return - cost_entry - cost_exit - borrow
 
             records.append({
                 "ticker":       ticker,

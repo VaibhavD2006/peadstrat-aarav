@@ -22,6 +22,9 @@ class ExperimentSpec:
     pead_gate: bool = False  # True → only enter when same-day price return confirms SUE direction
     min_pead_ret: float = 0.0  # Minimum |day_return| required for PEAD gate (0 = sign-only)
     trailing_stop_pct: float = 0.0  # Trail from running peak; 0 = use fixed stop_loss_pct
+    scaled_exit: bool = False        # True → ⅓ at leg1_target, ⅓ at leg2_target, ⅓ at hold_days
+    leg1_target: float = 0.05
+    leg2_target: float = 0.10
     notes: str = ""
 
 
@@ -388,6 +391,24 @@ ABLATION_MATRIX: list[ExperimentSpec] = [
         trailing_stop_pct=0.12,
         notes="E33 + strictest PEAD magnitude ≥2%; highest-conviction earnings moves only",
     ),
+    ExperimentSpec(
+        "E36_scaled_exit",
+        signals=["SUE_z"],
+        weights={"SUE_z": 1.0},
+        hold_days=20,
+        bsq_filter=True,
+        vol_target=0.15,
+        use_revision_weight=True,
+        concurrent_vol_adjust=True,
+        rho_cross_cohort=-0.05,
+        pead_gate=True,
+        min_pead_ret=0.01,
+        trailing_stop_pct=0.12,
+        scaled_exit=True,
+        leg1_target=0.05,
+        leg2_target=0.10,
+        notes="E33 + scaled exit: ⅓ at +5%, ⅓ at +10%, ⅓ held to day 20 with 12% trail",
+    ),
 ]
 
 
@@ -418,6 +439,7 @@ class AblationRunner:
                 "pead_gate": exp.pead_gate,
                 "min_pead_ret": exp.min_pead_ret,
                 "trailing_stop_pct": exp.trailing_stop_pct,
+                "scaled_exit": exp.scaled_exit,
                 **self.results.get(exp.name, {}),
             }
             for exp in self.experiments
