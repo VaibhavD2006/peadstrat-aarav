@@ -254,6 +254,35 @@ def test_scaled_exit_no_targets_hit_exits_at_hold_days():
     assert exit_dt == dates[20], f"Should exit at hold day 20: {exit_dt}"
 
 
+def test_scaled_exit_two_legs_half_exits_at_target_half_runs_to_hold():
+    """n_legs=2: ½ exits at +5%, ½ exits at hold_days. PnL > single full-hold exit when price rises."""
+    all_dates = pl.date_range(date(2024, 1, 2), date(2024, 3, 31), interval="1d", eager=True)
+    dates = [d for d in all_dates.to_list() if d.weekday() < 5]
+    # Steady rise: 100 → 120 over 40 days
+    closes = [100.0 + i * 0.5 for i in range(len(dates))]
+    rows = [{"date": d, "ticker": "TST", "open": float(c), "close": float(c),
+             "adj_close": float(c), "adv_20d_usd": 5e9}
+            for d, c in zip(dates, closes)]
+    prices = pl.DataFrame(rows)
+
+    config = BacktestConfig(hold_days=20, initial_capital=200_000, scaled_exit=True,
+                            n_legs=2, leg1_target=0.05)
+    engine = BacktestEngine(config=config)
+    signals = pl.DataFrame({
+        "ticker": ["TST"], "entry_date": [date(2024, 1, 2)],
+        "side": ["long"], "weight": [1.0],
+    })
+    results = engine.run(signals=signals, prices=prices)
+    assert results.shape[0] == 1
+    # Exit recorded at day 20 (max of the two leg exits)
+    exit_dt = date.fromisoformat(str(results["exit_date"][0]))
+    assert exit_dt == dates[20], f"Max leg exit should be day 20: {exit_dt}"
+    # Both legs profitable → positive PnL
+    assert results["pnl"][0] > 0
+    # Blended gross_return: leg1 at +5%, leg2 at +10% (day 20 price) → avg ~7.5%
+    assert results["gross_return"][0] > 0.05
+
+
 def test_trailing_stop_acts_as_downside_stop_when_no_peak():
     """Price drops immediately — trailing stop from peak=0 acts like a fixed stop at trail_pct."""
     all_dates = pl.date_range(date(2024, 1, 2), date(2024, 2, 15), interval="1d", eager=True)

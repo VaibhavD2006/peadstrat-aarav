@@ -6,17 +6,28 @@ class ESQSSignal:
     """
     Earnings Surprise Quality Score.
     Decomposes earnings quality into: revenue surprise, GM expansion,
-    SGA efficiency, and guidance direction.
+    SGA efficiency, and YoY EPS change.
+
+    eps_yoy replaces guidance_score (which was always null in real data).
+    revenue_consensus should be same-quarter prior year (YoY comparison).
     """
-    WEIGHTS = {"rev_surp": 0.30, "gm_expand": 0.25, "sga_eff": 0.20, "guidance": 0.25}
+    WEIGHTS = {"rev_surp": 0.30, "gm_expand": 0.25, "sga_eff": 0.20, "eps_yoy": 0.25}
 
     def _raw_components(self, df: pl.DataFrame) -> pl.DataFrame:
+        # Support both eps_yoy (new) and guidance_score (legacy tests)
+        if "eps_yoy" in df.columns:
+            eps_col = pl.col("eps_yoy").fill_null(0.0).alias("eps_yoy_filled")
+        elif "guidance_score" in df.columns:
+            eps_col = pl.col("guidance_score").fill_null(0.0).alias("eps_yoy_filled")
+        else:
+            eps_col = pl.lit(0.0).alias("eps_yoy_filled")
+
         return df.with_columns([
             ((pl.col("revenue_actual") - pl.col("revenue_consensus"))
              / pl.col("revenue_consensus").abs()).alias("rev_surp"),
             (pl.col("gross_margin_actual") - pl.col("gross_margin_trailing")).alias("gm_expand"),
             (-(pl.col("sga_pct_actual") - pl.col("sga_pct_trailing"))).alias("sga_eff"),
-            pl.col("guidance_score").fill_null(0.0).alias("guidance"),
+            eps_col,
         ])
 
     def compute(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -26,7 +37,7 @@ class ESQSSignal:
             w["rev_surp"]  * df["rev_surp"].to_numpy(allow_copy=True).astype(float) +
             w["gm_expand"] * df["gm_expand"].to_numpy(allow_copy=True).astype(float) +
             w["sga_eff"]   * df["sga_eff"].to_numpy(allow_copy=True).astype(float) +
-            w["guidance"]  * df["guidance"].to_numpy(allow_copy=True).astype(float)
+            w["eps_yoy"]   * df["eps_yoy_filled"].to_numpy(allow_copy=True).astype(float)
         )
         return df.with_columns(pl.Series(name="ESQS", values=scores, dtype=pl.Float64))
 

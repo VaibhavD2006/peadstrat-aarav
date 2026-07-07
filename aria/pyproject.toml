@@ -42,4 +42,5 @@ packages = [
     "aria.portfolio",
     "aria.research",
     "aria.tests",
+    "aria.trading",
 ]

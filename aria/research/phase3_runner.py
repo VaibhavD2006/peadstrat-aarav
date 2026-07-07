@@ -482,6 +482,7 @@ class Phase3Runner:
         start_date: date = date(2021, 1, 1),
         end_date: date = date(2024, 12, 31),
         experiments: Optional[list[ExperimentSpec]] = None,
+        use_edgar: bool = False,
     ) -> AblationRunner:
         if experiments is None:
             experiments = ABLATION_MATRIX
@@ -587,7 +588,7 @@ class Phase3Runner:
             ivrs_df = pl.DataFrame()
 
         # --- determine which Phase 4/5 features are needed ---
-        has_pead = any("PEAD_z" in exp.signals for exp in experiments)
+        has_pead = any("PEAD_z" in exp.signals and not exp.use_simfin_pead_z for exp in experiments)
         needs_bsq = any(exp.bsq_filter or "BSQ_z" in exp.signals for exp in experiments)
         needs_beta_neutral = any(exp.beta_neutral for exp in experiments)
         has_sue = any("SUE_z" in exp.signals for exp in experiments)
@@ -726,30 +727,48 @@ class Phase3Runner:
             .sort("date")
         )
 
-        # Union of SimFin publish dates (non-PEAD signals) and actual PEAD entry dates
+        # EDGAR filing dates (supplements SimFin for pre-2020 history)
+        # v2 uses 8-K announcement dates (actual earnings call day) for clean PEAD signal
+        edgar_event_by_date: dict[date, list[str]] = {}
+        if use_edgar:
+            from aria.data.edgar import EdgarLoader
+            _edgar = EdgarLoader()
+            edgar_event_by_date = _edgar.build_event_by_date_8k(universe, start_date, end_date)
+            print(f"[Edgar] {len(edgar_event_by_date)} EDGAR event dates loaded (8-K announcement dates)")
+
+        # Union of SimFin publish dates, PEAD entry dates, and EDGAR filing dates
         pead_entry_date_set: set[date] = set(pead_by_date.keys()) if has_pead else set()
-        all_sorted_dates = sorted(set(sorted_dates) | pead_entry_date_set)
+        edgar_date_set: set[date] = set(edgar_event_by_date.keys())
+        all_sorted_dates = sorted(set(sorted_dates) | pead_entry_date_set | edgar_date_set)
         n_dates = len(all_sorted_dates)
         print(f"[Phase3] Processing {n_dates} event dates "
-              f"({len(sorted_dates)} SimFin + {len(pead_entry_date_set)} PEAD)...\n")
+              f"({len(sorted_dates)} SimFin + {len(pead_entry_date_set)} PEAD"
+              f" + {len(edgar_date_set)} EDGAR)...\n")
+
+        universe_set: set[str] = set(universe)
 
         for idx, entry_date in enumerate(all_sorted_dates):
             is_simfin_date = entry_date in event_by_date
             is_pead_entry = entry_date in pead_by_date
+            is_edgar_date = entry_date in edgar_event_by_date
 
-            if not is_simfin_date and not is_pead_entry:
+            if not is_simfin_date and not is_pead_entry and not is_edgar_date:
                 continue
 
             # Determine ticker pool for this date
             if is_simfin_date:
                 win_tickers = event_by_date[entry_date]
-            else:
+            elif is_pead_entry:
                 win_tickers = pead_by_date[entry_date]["ticker"].to_list()
+            else:
+                win_tickers = list(dict.fromkeys(
+                    t for t in edgar_event_by_date[entry_date] if t in universe_set
+                ))
 
             if len(win_tickers) < self.min_event_pool:
                 continue
 
-            # ESQS (only on SimFin publish dates; pure PEAD entry dates have no income data yet)
+            # ESQS (only on SimFin publish dates; PEAD/EDGAR entry dates have no income data yet)
             if is_simfin_date:
                 esqs_rows = []
                 for t in win_tickers:
@@ -765,7 +784,7 @@ class Phase3Runner:
                     continue
                 present = esqs_df["ticker"].to_list()
             else:
-                # Pure PEAD entry date: no SimFin data available yet; use PEAD tickers directly
+                # PEAD or EDGAR entry date: no SimFin income data; use tickers directly
                 present = win_tickers
                 esqs_df = pl.DataFrame({
                     "ticker": present,
@@ -925,14 +944,16 @@ class Phase3Runner:
                 if exp.regime_filter and not regime_ok:
                     continue
 
-                is_pead_exp = "PEAD_z" in exp.signals
+                is_pead_exp = "PEAD_z" in exp.signals and not exp.use_simfin_pead_z
 
                 # PEAD experiments run only on actual PEAD entry dates.
+                # SimFin-PEAD / cross-sectional experiments run on SimFin or EDGAR dates.
                 # Non-PEAD experiments run only on SimFin publish dates.
                 if is_pead_exp and not is_pead_entry:
                     continue
                 if not is_pead_exp and not is_simfin_date:
-                    continue
+                    if not (exp.use_simfin_pead_z and is_edgar_date):
+                        continue
 
                 effective_entry = pead_entry_date if is_pead_exp else entry_date
                 effective_hold = exp.hold_days if exp.hold_days != 10 else self.hold_days
@@ -943,6 +964,7 @@ class Phase3Runner:
                     stop_loss_pct=exp.stop_loss_pct,
                     trailing_stop_pct=exp.trailing_stop_pct,
                     scaled_exit=exp.scaled_exit,
+                    n_legs=exp.n_legs,
                     leg1_target=exp.leg1_target,
                     leg2_target=exp.leg2_target,
                 )
@@ -953,8 +975,24 @@ class Phase3Runner:
                     mapped = "FTS_z" if sig == "RMV_z" else sig
                     weights[mapped] = weights.get(mapped, 0) + w
 
+                # Cross-sectional PEAD_z: z-score earnings-day reactions across fresh-earnings stocks
+                score_base = base
+                if exp.use_simfin_pead_z and pead_gate_map and len(pead_gate_map) >= 3:
+                    raw_vals = list(pead_gate_map.values())
+                    mu = float(np.mean(raw_vals))
+                    sigma = float(np.std(raw_vals))
+                    if sigma > 1e-10:
+                        pcs_tickers = list(pead_gate_map.keys())
+                        pcs_zvals = [float(np.clip((v - mu) / sigma, -3.0, 3.0))
+                                     for v in raw_vals]
+                        pcs_df = pl.DataFrame({"ticker": pcs_tickers, "PEAD_cs": pcs_zvals})
+                        score_base = score_base.join(pcs_df, on="ticker", how="left")
+                        score_base = score_base.with_columns(
+                            pl.col("PEAD_cs").fill_null(0.0).alias("PEAD_z")
+                        ).drop("PEAD_cs")
+
                 scorer = CompositeScorer(weights=weights)
-                scored = scorer.score(base)
+                scored = scorer.score(score_base)
 
                 if exp.ivrs_multiplier and "IVRS_z" in scored.columns:
                     scored = scored.with_columns([
@@ -963,7 +1001,9 @@ class Phase3Runner:
                          ).alias("composite")
                     ])
 
-                longs, shorts = scorer.select_long_short(scored, self.top_pct, self.bottom_pct)
+                exp_top = exp.top_pct if exp.top_pct > 0 else self.top_pct
+                exp_bot = exp.bottom_pct if exp.bottom_pct > 0 else self.bottom_pct
+                longs, shorts = scorer.select_long_short(scored, exp_top, exp_bot)
 
                 # |SUE_z| threshold: drop near-zero signals
                 if exp.min_sue_z > 0 and "SUE_z" in base.columns:
@@ -1091,6 +1131,7 @@ class Phase3Runner:
         print(f"\n[Phase3/4] Backtest done in {time.time()-t0:.1f}s. Computing metrics...\n")
 
         ablation = AblationRunner(experiments=experiments)
+        self._daily_rets: dict[str, tuple[list, np.ndarray]] = {}
 
         for exp in experiments:
             all_trades = exp_trades[exp.name]
@@ -1109,6 +1150,7 @@ class Phase3Runner:
             rets = np.array(
                 [pnl_map.get(d, 0.0) / self.initial_capital for d in cal_dates]
             )
+            self._daily_rets[exp.name] = (cal_dates, rets)
             metrics = self._pa.summarize(rets)
 
             wins = int((combined["pnl"] > 0).sum())
@@ -1166,15 +1208,101 @@ class Phase3Runner:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def _plot_equity_drawdown(
+    exp_name: str,
+    cal_dates: list,
+    rets: np.ndarray,
+    initial_capital: float,
+    metrics: dict,
+    out_path: str,
+) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
+    from matplotlib.gridspec import GridSpec
+
+    equity = initial_capital * np.cumprod(1.0 + rets)
+    rolling_max = np.maximum.accumulate(equity)
+    drawdown = (equity - rolling_max) / rolling_max * 100.0
+
+    fig = plt.figure(figsize=(14, 8), facecolor="#0d1117")
+    gs = GridSpec(2, 1, figure=fig, height_ratios=[3, 1], hspace=0.08)
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1], sharex=ax1)
+
+    import matplotlib.dates as mdates
+    date_nums = mdates.date2num(cal_dates)
+
+    # --- equity curve ---
+    ax1.plot(date_nums, equity / 1_000, color="#00d4aa", linewidth=1.4, label="Portfolio Value")
+    ax1.fill_between(date_nums, initial_capital / 1_000, equity / 1_000,
+                     where=(equity >= initial_capital),
+                     alpha=0.15, color="#00d4aa")
+    ax1.fill_between(date_nums, initial_capital / 1_000, equity / 1_000,
+                     where=(equity < initial_capital),
+                     alpha=0.25, color="#ff4d4d")
+    ax1.axhline(initial_capital / 1_000, color="#555", linewidth=0.8, linestyle="--")
+
+    final_val = equity[-1]
+    ann_ret  = metrics.get("annual_return", float("nan"))
+    sharpe   = metrics.get("sharpe", float("nan"))
+    max_dd   = metrics.get("max_drawdown", float("nan"))
+    win_rate = metrics.get("win_rate", float("nan"))
+    rr       = metrics.get("rr_ratio", float("nan"))
+    n_yrs = len(rets) / 252
+
+    stats_text = (
+        f"CAGR: {ann_ret:+.1%}   Sharpe: {sharpe:.2f}   MaxDD: {max_dd:.1%}\n"
+        f"WR: {win_rate:.1%}   RR: {rr:.2f}   "
+        f"${initial_capital:,.0f} → ${final_val:,.0f} over {n_yrs:.0f}yr"
+    )
+    ax1.text(0.01, 0.97, stats_text, transform=ax1.transAxes,
+             fontsize=9, verticalalignment="top", color="#cccccc",
+             bbox=dict(boxstyle="round,pad=0.4", facecolor="#1c2333", edgecolor="#333"))
+
+    ax1.set_ylabel("Portfolio Value ($K)", color="#cccccc", fontsize=10)
+    ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}K"))
+    ax1.set_facecolor("#0d1117")
+    ax1.tick_params(colors="#888", labelbottom=False)
+    ax1.spines[:].set_color("#333")
+    ax1.set_title(f"ARIA Strategy — {exp_name}", color="#eeeeee", fontsize=13, pad=10)
+    ax1.legend(facecolor="#1c2333", edgecolor="#333", labelcolor="#ccc", fontsize=9)
+
+    # --- drawdown panel ---
+    ax2.fill_between(date_nums, drawdown, 0, color="#ff4d4d", alpha=0.6)
+    ax2.plot(date_nums, drawdown, color="#ff4d4d", linewidth=0.8)
+    ax2.axhline(0, color="#555", linewidth=0.6)
+    ax2.set_ylabel("Drawdown (%)", color="#cccccc", fontsize=10)
+    ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
+    ax2.set_facecolor("#0d1117")
+    ax2.tick_params(colors="#888")
+    ax2.spines[:].set_color("#333")
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax2.xaxis.set_major_locator(mdates.YearLocator())
+    plt.setp(ax2.xaxis.get_majorticklabels(), color="#888")
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    plt.close()
+    print(f"[Plot] Saved to {out_path}")
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Run ARIA Phase 3 ablation experiments")
-    parser.add_argument("--start", default="2021-01-01")
-    parser.add_argument("--end",   default="2024-12-31")
-    parser.add_argument("--exp",   default=None, help="Comma-separated experiment names")
+    parser.add_argument("--start",   default="2021-01-01")
+    parser.add_argument("--end",     default="2024-12-31")
+    parser.add_argument("--exp",     default=None, help="Comma-separated experiment names")
+    parser.add_argument("--capital", default=None, type=float,
+                        help="Initial capital in dollars (default 100,000,000)")
+    parser.add_argument("--plot",    default=None,
+                        help="Save equity+drawdown PNG to this path (use with single --exp)")
     parser.add_argument("--price-source", default="simfin", choices=["simfin", "yfinance"],
                         help="Price data source (simfin=CSV, yfinance=downloaded via API)")
+    parser.add_argument("--edgar", action="store_true",
+                        help="Supplement SimFin events with SEC EDGAR 10-Q filing dates (unlocks 2009-2019)")
     args = parser.parse_args()
 
     start = date.fromisoformat(args.start)
@@ -1184,14 +1312,16 @@ if __name__ == "__main__":
         names = set(args.exp.split(","))
         exps = [e for e in ABLATION_MATRIX if e.name in names]
 
-    runner = Phase3Runner(price_source=args.price_source)
-    ablation = runner.run(start_date=start, end_date=end, experiments=exps)
+    capital_kwarg = {"initial_capital": args.capital} if args.capital else {}
+    runner = Phase3Runner(price_source=args.price_source, **capital_kwarg)
+    ablation = runner.run(start_date=start, end_date=end, experiments=exps,
+                          use_edgar=args.edgar)
 
     df = ablation.summary_df()
     cols = [
         "experiment", "sharpe", "annual_return", "annual_vol", "max_drawdown",
-        "n_trades", "win_rate", "IC_ESQS_z", "IC_IFR_z", "IC_PEAD_z", "IC_BSQ_z", "IC_SUE_z",
-        "bsq_filter", "beta_neutral", "vol_target",
+        "n_trades", "win_rate", "rr_ratio", "IC_ESQS_z", "IC_IFR_z", "IC_PEAD_z", "IC_BSQ_z", "IC_SUE_z",
+        "bsq_filter", "beta_neutral", "vol_target", "trailing_stop_pct", "hold_days",
     ]
     print("\n=== ABLATION SUMMARY ===")
     with pl.Config(tbl_rows=20, float_precision=3):
@@ -1200,3 +1330,21 @@ if __name__ == "__main__":
     best = ablation.best_by("sharpe")
     if best:
         print(f"\nBest by Sharpe: {best.name}")
+
+    if args.plot and exps and len(exps) == 1:
+        import pathlib
+        pathlib.Path(args.plot).parent.mkdir(parents=True, exist_ok=True)
+        exp_name = exps[0].name
+        if exp_name in runner._daily_rets:
+            cal_dates, rets = runner._daily_rets[exp_name]
+            result_metrics = ablation.results.get(exp_name, {})
+            _plot_equity_drawdown(
+                exp_name=exp_name,
+                cal_dates=cal_dates,
+                rets=rets,
+                initial_capital=runner.initial_capital,
+                metrics=result_metrics,
+                out_path=args.plot,
+            )
+        else:
+            print("[Plot] No daily returns available — did the experiment produce trades?")

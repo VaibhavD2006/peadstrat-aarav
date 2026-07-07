@@ -13,9 +13,10 @@ class BacktestConfig:
     max_gap_pct: float = 0.03
     stop_loss_pct: float = 0.0
     trailing_stop_pct: float = 0.0  # trail from running peak; 0 = disabled
-    scaled_exit: bool = False        # True → ⅓ at leg1_target, ⅓ at leg2_target, ⅓ at hold_days
-    leg1_target: float = 0.05       # direction-adjusted return trigger for first third
-    leg2_target: float = 0.10       # direction-adjusted return trigger for second third
+    scaled_exit: bool = False        # True → split exit across n_legs equal tranches
+    n_legs: int = 3                  # 2 → ½ at leg1_target + ½ at hold_days; 3 → thirds at leg1/leg2/hold
+    leg1_target: float = 0.05       # return trigger for first tranche
+    leg2_target: float = 0.10       # return trigger for second tranche (n_legs=3 only)
 
 @dataclass
 class Position:
@@ -78,32 +79,28 @@ class BacktestEngine:
             closes = future["close"].to_list()
 
             if self.config.scaled_exit:
-                # ⅓ exits at leg1_target, ⅓ at leg2_target, ⅓ at hold_days (with trail)
-                leg_exits = [hold - 1, hold - 1, hold - 1]
+                n_legs = self.config.n_legs
+                leg_exits = [hold - 1] * n_legs
                 peak_cum_ret = 0.0
-                leg1_hit = leg2_hit = False
+                leg_hit = [False] * (n_legs - 1)  # last leg always runs to hold/stop
+                targets = [self.config.leg1_target, self.config.leg2_target][: n_legs - 1]
                 for i, close in enumerate(closes[:hold]):
                     cum_ret = direction * (close - entry_price) / entry_price
                     peak_cum_ret = max(peak_cum_ret, cum_ret)
-                    if not leg1_hit and cum_ret >= self.config.leg1_target:
-                        leg_exits[0] = i
-                        leg1_hit = True
-                    if not leg2_hit and cum_ret >= self.config.leg2_target:
-                        leg_exits[1] = i
-                        leg2_hit = True
-                    # trailing/fixed stop fires on all remaining legs
+                    for li, tgt in enumerate(targets):
+                        if not leg_hit[li] and cum_ret >= tgt:
+                            leg_exits[li] = i
+                            leg_hit[li] = True
                     stop_hit = (trail_stop > 0.0 and cum_ret < peak_cum_ret - trail_stop) or \
                                (stop_loss > 0.0 and cum_ret < -stop_loss)
                     if stop_hit:
-                        if not leg1_hit:
-                            leg_exits[0] = i
-                        if not leg2_hit:
-                            leg_exits[1] = i
-                        leg_exits[2] = i
+                        for li in range(n_legs):
+                            if li >= len(leg_hit) or not leg_hit[li]:
+                                leg_exits[li] = i
                         break
 
-                leg_cap = capital / 3.0
-                leg_cost_entry = capital * cost.total_cost_bps(capital, adv, True) / 10_000 / 3.0
+                leg_cap = capital / n_legs
+                leg_cost_entry = capital * cost.total_cost_bps(capital, adv, True) / 10_000 / n_legs
                 total_pnl = 0.0
                 for li in leg_exits:
                     lp = float(closes[li])
@@ -115,7 +112,7 @@ class BacktestEngine:
                 exit_idx   = max(leg_exits)
                 exit_date  = future["date"][exit_idx]
                 exit_price = float(closes[exit_idx])
-                gross_return = total_pnl / capital   # blended return on full capital
+                gross_return = total_pnl / capital
                 pnl = total_pnl
 
             else:

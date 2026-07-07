@@ -4,6 +4,15 @@ __pycache__/
 .pytest_cache/
 data/parquet/
 data/cache/
+data/edgar/
+data/simfin/
+data/consensus/
+data/earnings_dates/
 mlruns/
 *.db
 .env
+results/
+trading/state.json
+trading/nav_history.json
+trading/edgar_cache/
+trading/paper_trader.log
