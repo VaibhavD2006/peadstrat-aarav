@@ -1,11 +1,13 @@
 @echo off
 REM ARIA E49 Paper Trader — Daily runner
-REM Schedule with Windows Task Scheduler at 9:45 AM ET on weekdays.
+REM Schedule with Windows Task Scheduler at 4:15 PM ET on weekdays.
+REM Runs after market close so yfinance returns today's actual closing prices,
+REM matching the backtest's close-to-close entry/exit assumptions exactly.
 REM
 REM Task Scheduler setup:
 REM   Action:    Start a program
 REM   Program:   C:\path\to\this\run_daily.bat
-REM   Trigger:   Daily at 9:45 AM, Mon-Fri only
+REM   Trigger:   Daily at 4:15 PM, Mon-Fri only
 REM
 REM Set your Discord webhook URL below (or set it as a system env var):
 REM Set webhook here only if not already in system env vars (use setx to set permanently)

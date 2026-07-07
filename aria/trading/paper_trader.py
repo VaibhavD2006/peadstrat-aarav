@@ -2,7 +2,12 @@
 """
 ARIA E49 Paper Trader
 =====================
-Runs daily after market open (9:45-10:00 AM ET).
+Runs daily at 4:15 PM ET (after market close).
+
+Running at 4:15 PM means yfinance returns today's actual closing prices,
+which aligns exactly with the backtest (close-to-close entries/exits).
+The 9:45 AM approach used yesterday's close, creating a 1-day lag vs the
+backtest assumptions.
 
 Implements the E49 PEAD strategy:
   - Detects earnings via SEC EDGAR 8-K filings (actual announcement day)
@@ -16,7 +21,7 @@ Setup:
   1. Set DISCORD_WEBHOOK_URL env var (create a webhook in Discord channel settings)
   2. Optionally set ARIA_CAPITAL (default 50000)
   3. Run: python -m aria.trading.paper_trader
-  4. Schedule with Windows Task Scheduler at 9:45 AM ET on weekdays
+  4. Schedule with Windows Task Scheduler at 4:15 PM ET on weekdays
 
 Backtest results (E49, 2009-2024):
   WR=60.9%  RR=1.79  Sharpe=2.84  MaxDD=-12.0%  N=1790 trades
@@ -538,7 +543,7 @@ def _fmt_summary(
 ) -> str:
     today_pct = (nav - nav_prev) / nav_prev * 100 if nav_prev else 0
     lines = [
-        f":bar_chart: **{CFG['strategy_name']} | Daily Report | {today.isoformat()}**",
+        f":bar_chart: **{CFG['strategy_name']} | EOD Report | {today.isoformat()}**",
         (f"NAV: ${nav:,.2f} ({today_pct:+.2f}% today)  |  Cash: ${state.cash:,.2f}"
          f"  |  Realized: ${realized:+,.2f}  Unrealized: ${unrealized:+,.2f}"),
         "",
