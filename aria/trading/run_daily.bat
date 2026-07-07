@@ -8,7 +8,8 @@ REM   Program:   C:\path\to\this\run_daily.bat
 REM   Trigger:   Daily at 9:45 AM, Mon-Fri only
 REM
 REM Set your Discord webhook URL below (or set it as a system env var):
-SET DISCORD_WEBHOOK_URL=YOUR_WEBHOOK_URL_HERE
+REM Set webhook here only if not already in system env vars (use setx to set permanently)
+IF "%DISCORD_WEBHOOK_URL%"=="" SET DISCORD_WEBHOOK_URL=YOUR_WEBHOOK_URL_HERE
 
 REM Optional: override starting capital (default 50000)
 REM SET ARIA_CAPITAL=50000
