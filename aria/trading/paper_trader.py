@@ -517,7 +517,10 @@ def _send_discord(message: str) -> None:
         req = urllib.request.Request(
             webhook,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "DiscordBot (aria-paper-trader, 1.0)",
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10):
