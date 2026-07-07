@@ -39,6 +39,13 @@ from typing import Optional
 import numpy as np
 import yfinance as yf
 
+# Load .env so DISCORD_WEBHOOK_URL and other secrets are available
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(pathlib.Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass  # python-dotenv optional; fall back to system env vars
+
 # ---------------------------------------------------------------------------
 # Paths and config
 # ---------------------------------------------------------------------------
