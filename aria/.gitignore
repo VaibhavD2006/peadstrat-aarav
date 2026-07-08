@@ -17,3 +17,5 @@ trading/state.json
 trading/nav_history.json
 trading/edgar_cache/
 trading/paper_trader.log
+trading/monthly_analysis.log
+trading/monthly_analysis_*.md
